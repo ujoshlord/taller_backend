@@ -23,5 +23,7 @@ JWT_SECRET_KEY = os.getenv(
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
 
-SPEERO_API_URL = os.getenv("SPEERO_API_URL", "https://speero.net/api/v1").rstrip("/")
+SPEERO_API_URL = os.getenv("SPEERO_API_URL", "https://speero.net/api/v1/search").rstrip("/")
+if SPEERO_API_URL.endswith("/api/v1"):
+    SPEERO_API_URL = f"{SPEERO_API_URL}/search"
 SPEERO_API_KEY = os.getenv("SPEERO_API_KEY", "").strip()

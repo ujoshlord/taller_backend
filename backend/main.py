@@ -66,7 +66,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://taller-mecanic-front.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -802,86 +802,105 @@ def actualizar_consulta(
 @app.get("/api/productos/buscar-externo")
 def buscar_productos_speero(
     q: str = Query(..., min_length=1, description="Término de búsqueda de repuesto"),
+    page: int = Query(default=1, ge=1),
     current_user: Usuario = Depends(require_roles("Administrador", "Bodeguero")),
 ):
     """
-    Intenta consultar el catálogo externo en https://speero.net/api/v1.
-    Si la API externa no responde, requiere autenticación o devuelve error,
-    informa claramente al frontend para habilitar el ingreso manual con URL/Base64.
+    Consulta el catálogo externo en https://speero.net/api/v1/search?q=...
+    Adapta la respuesta oficial de Speero (query, page, perPage, total, results[name, url, inStock, oem, image, price{amount, currency}, grade]).
+    Si la API externa no responde o devuelve vacío, habilita el ingreso manual con URL/Base64.
     """
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "TallerProOS/1.0",
+    }
     if SPEERO_API_KEY:
         headers["Authorization"] = f"Bearer {SPEERO_API_KEY}"
 
-    candidate_urls = [
-        f"{SPEERO_API_URL}/products",
-        f"{SPEERO_API_URL}/parts",
-        f"{SPEERO_API_URL}/search",
-        SPEERO_API_URL,
-    ]
+    search_url = SPEERO_API_URL if SPEERO_API_URL.endswith("/search") else f"{SPEERO_API_URL.rstrip('/')}/search"
 
-    for url in candidate_urls:
-        try:
-            resp = requests.get(
-                url,
-                params={"q": q, "search": q, "query": q},
-                headers=headers,
-                timeout=4,
-            )
-            if resp.status_code == 200:
-                content_type = resp.headers.get("Content-Type", "")
-                if "application/json" in content_type:
-                    data = resp.json()
-                    raw_items = (
-                        data
-                        if isinstance(data, list)
-                        else data.get("data") or data.get("products") or data.get("items") or data.get("results") or []
-                    )
-                    if isinstance(raw_items, list) and len(raw_items) > 0:
-                        normalized = []
-                        for idx, item in enumerate(raw_items[:20]):
-                            if isinstance(item, dict):
-                                nombre = (
-                                    item.get("name")
-                                    or item.get("nombre")
-                                    or item.get("title")
-                                    or item.get("description")
-                                    or f"Repuesto Speero #{idx + 1}"
-                                )
-                                imagen = (
-                                    item.get("image")
-                                    or item.get("url_imagen")
-                                    or item.get("image_url")
-                                    or item.get("thumbnail")
-                                    or ""
-                                )
-                                precio = float(item.get("price") or item.get("cost") or item.get("costo") or 120.0)
-                                normalized.append(
-                                    {
-                                        "sku": str(item.get("id") or item.get("sku") or f"SP-{idx+100}"),
-                                        "nombre": nombre,
-                                        "url_imagen": imagen,
-                                        "precio_sugerido": precio,
-                                        "origen": "Speero API v1",
-                                    }
-                                )
-                        return {
-                            "api_online": True,
-                            "endpoint_consultado": url,
-                            "query": q,
-                            "resultados": normalized,
-                            "mensaje": f"Se encontraron {len(normalized)} resultados en {SPEERO_API_URL}.",
+    try:
+        resp = requests.get(
+            search_url,
+            params={"q": q, "page": page},
+            headers=headers,
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            raw_items = data.get("results") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            if isinstance(raw_items, list) and len(raw_items) > 0:
+                normalized = []
+                for idx, item in enumerate(raw_items):
+                    if not isinstance(item, dict):
+                        continue
+                    oem = str(item.get("oem") or item.get("id") or f"SP-{idx + 1}").strip()
+                    raw_name = str(item.get("name") or f"Repuesto Speero #{idx + 1}").strip()
+                    grade = str(item.get("grade") or "aftermarket").strip()
+                    in_stock = bool(item.get("inStock", True))
+                    part_url = str(item.get("url") or "").strip()
+                    image_url = str(item.get("image") or item.get("url_imagen") or "").strip()
+
+                    price_field = item.get("price")
+                    if isinstance(price_field, dict):
+                        amount = float(price_field.get("amount") or 0.0)
+                        currency = str(price_field.get("currency") or "SAR")
+                    else:
+                        try:
+                            amount = float(price_field or 0.0)
+                        except (TypeError, ValueError):
+                            amount = 0.0
+                        currency = "SAR"
+
+                    nombre_compuesto = f"{raw_name} [OEM: {oem}]" if oem else raw_name
+
+                    normalized.append(
+                        {
+                            "sku": oem,
+                            "oem": oem,
+                            "name": raw_name,
+                            "nombre": nombre_compuesto,
+                            "url": part_url,
+                            "inStock": in_stock,
+                            "image": image_url,
+                            "url_imagen": image_url,
+                            "price": {
+                                "amount": amount,
+                                "currency": currency,
+                            },
+                            "precio_sugerido": amount,
+                            "moneda": currency,
+                            "grade": grade,
+                            "origen": "Speero API v1",
                         }
-        except Exception:
-            continue
+                    )
+
+                total_found = data.get("total", len(normalized)) if isinstance(data, dict) else len(normalized)
+                return {
+                    "api_online": True,
+                    "endpoint_consultado": search_url,
+                    "query": data.get("query", q) if isinstance(data, dict) else q,
+                    "page": data.get("page", page) if isinstance(data, dict) else page,
+                    "perPage": data.get("perPage", len(normalized)) if isinstance(data, dict) else len(normalized),
+                    "total": total_found,
+                    "resultados": normalized,
+                    "results": normalized,
+                    "mensaje": f"Se encontraron {total_found} repuestos en Speero API (mostrando {len(normalized)} en página {page}).",
+                }
+    except Exception:
+        pass
 
     return {
         "api_online": False,
-        "endpoint_consultado": SPEERO_API_URL,
+        "endpoint_consultado": search_url,
         "query": q,
+        "page": page,
+        "perPage": 20,
+        "total": 0,
         "resultados": [],
+        "results": [],
         "mensaje": (
-            f"El servicio externo ({SPEERO_API_URL}) no devolvió resultados o no se encuentra disponible en este momento. "
+            f"El servicio externo ({search_url}) no devolvió resultados o no se encuentra disponible en este momento. "
             "Puedes registrar la compra manualmente ingresando los datos del repuesto y su imagen (URL o Base64)."
         ),
     }
