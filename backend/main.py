@@ -799,97 +799,16 @@ def actualizar_consulta(
 # =============================================================================
 # 7. MÓDULO DE PRODUCTOS, BUSCADOR API SPEERO E INVENTARIO (Bodeguero, Mecánico, Admin)
 # =============================================================================
-_TRANSLATION_CACHE: dict[str, str] = {
-    "طقم فحمات فرامل امامية": "Juego de pastillas de freno delanteras",
-    "طقم فحمات فرامل خلفية": "Juego de pastillas de freno traseras",
-    "فحمات فرامل امامية": "Pastillas de freno delanteras",
-    "فحمات فرامل خلفية": "Pastillas de freno traseras",
-    "هوب فرامل امامي": "Disco de freno delantero",
-    "هوب فرامل خلفي": "Disco de freno trasero",
-    "فلتر زيت": "Filtro de aceite",
-    "فلتر زيت المحرك": "Filtro de aceite de motor",
-    "فلتر هواء": "Filtro de aire de motor",
-    "فلتر مكيف": "Filtro de cabina / aire acondicionado",
-    "فلتر بنزين": "Filtro de combustible",
-    "مساعد امامي يمين": "Amortiguador delantero derecho",
-    "مساعد امامي يسار": "Amortiguador delantero izquierdo",
-    "مساعد خلفي يمين": "Amortiguador trasero derecho",
-    "مساعد خلفي يسار": "Amortiguador trasero izquierdo",
-    "مساعد خلفي": "Amortiguador trasero",
-    "مساعد امامي": "Amortiguador delantero",
-    "طقم كلتش": "Kit de embrague (Clutch)",
-    "طرمبة ماء": "Bomba de agua",
-    "طرمبة بنزين": "Bomba de combustible",
-    "طرمبة زيت": "Bomba de aceite",
-    "رديتر ماء": "Radiador de enfriamiento",
-    "رديتر مكيف": "Condensador de aire acondicionado",
-    "كويل": "Bobina de encendido",
-    "طقم بواجي": "Juego de bujías de encendido",
-    "بواجي": "Bujía de encendido",
-}
-
-
-def _traducir_nombres_a_espanol(textos: List[str]) -> dict[str, str]:
-    """
-    Traduce en lote al español los nombres de repuestos provenientes de Speero API
-    usando caché en memoria + endpoint de traducción rápida.
-    """
-    resultado: dict[str, str] = {}
-    pendientes: List[str] = []
-
-    for t in textos:
-        clean = (t or "").strip()
-        if not clean:
-            continue
-        if clean in _TRANSLATION_CACHE:
-            resultado[clean] = _TRANSLATION_CACHE[clean]
-        elif clean not in pendientes:
-            pendientes.append(clean)
-
-    if pendientes:
-        try:
-            params = [("client", "dict-chrome-ex"), ("sl", "auto"), ("tl", "es")]
-            for p in pendientes:
-                params.append(("q", p))
-            r = requests.get(
-                "https://clients5.google.com/translate_a/t",
-                params=params,
-                timeout=4,
-            )
-            if r.status_code == 200:
-                parsed = r.json()
-                if isinstance(parsed, list):
-                    for idx, orig in enumerate(pendientes):
-                        if idx < len(parsed):
-                            entry = parsed[idx]
-                            trad = (
-                                entry[0]
-                                if isinstance(entry, list) and len(entry) > 0
-                                else (entry if isinstance(entry, str) else orig)
-                            )
-                            trad_clean = str(trad).strip().capitalize()
-                            _TRANSLATION_CACHE[orig] = trad_clean
-                            resultado[orig] = trad_clean
-        except Exception:
-            pass
-
-    for t in textos:
-        clean = (t or "").strip()
-        if clean and clean not in resultado:
-            resultado[clean] = clean
-
-    return resultado
-
-
 @app.get("/api/productos/buscar-externo")
 def buscar_productos_speero(
     q: str = Query(..., min_length=1, description="Término de búsqueda de repuesto"),
     page: int = Query(default=1, ge=1, description="1-based page number. Default 1."),
+    locale: str = Query(default="en", description="Idioma de respuesta de Speero (en / ar)"),
     current_user: Usuario = Depends(require_roles("Administrador", "Bodeguero")),
 ):
     """
-    Consulta el catálogo externo en https://speero.net/api/v1/search?q=...&page=...
-    Traduce automáticamente los nombres al español y devuelve metadatos de paginación.
+    Consulta el catálogo externo en https://speero.net/api/v1/search?q=...&page=...&locale=en
+    Devuelve los resultados en inglés nativo de Speero junto con los metadatos de paginación.
     """
     headers = {
         "Accept": "application/json",
@@ -903,7 +822,7 @@ def buscar_productos_speero(
     try:
         resp = requests.get(
             search_url,
-            params={"q": q, "page": page},
+            params={"q": q, "page": page, "locale": locale},
             headers=headers,
             timeout=8,
         )
@@ -911,20 +830,12 @@ def buscar_productos_speero(
             data = resp.json()
             raw_items = data.get("results") if isinstance(data, dict) else (data if isinstance(data, list) else [])
             if isinstance(raw_items, list) and len(raw_items) > 0:
-                nombres_unicos = [
-                    str(it.get("name") or "").strip()
-                    for it in raw_items
-                    if isinstance(it, dict) and it.get("name")
-                ]
-                mapa_traducciones = _traducir_nombres_a_espanol(nombres_unicos)
-
                 normalized = []
                 for idx, item in enumerate(raw_items):
                     if not isinstance(item, dict):
                         continue
                     oem = str(item.get("oem") or item.get("id") or f"SP-{idx + 1}").strip()
-                    raw_name = str(item.get("name") or f"Repuesto Speero #{idx + 1}").strip()
-                    name_es = mapa_traducciones.get(raw_name, raw_name)
+                    part_name = str(item.get("name") or f"Spare Part #{idx + 1}").strip()
                     grade = str(item.get("grade") or "aftermarket").strip()
                     in_stock = bool(item.get("inStock", True))
                     part_url = str(item.get("url") or "").strip()
@@ -941,15 +852,13 @@ def buscar_productos_speero(
                             amount = 0.0
                         currency = "SAR"
 
-                    nombre_compuesto = f"{name_es} [OEM: {oem}]" if oem else name_es
+                    nombre_compuesto = f"{part_name} [OEM: {oem}]" if oem else part_name
 
                     normalized.append(
                         {
                             "sku": oem,
                             "oem": oem,
-                            "name": name_es,
-                            "name_es": name_es,
-                            "name_original": raw_name,
+                            "name": part_name,
                             "nombre": nombre_compuesto,
                             "url": part_url,
                             "inStock": in_stock,
