@@ -266,4 +266,7 @@ class FacturaDetalleResponse(BaseModel):
     detalle_diagnostico: Optional[str] = None
     items_kardex: List[KardexItemResponse]
     total_items: int
+    subtotal_repuestos: float
+    mano_obra: float
+    tipo_mano_obra: str
     total_factura: float

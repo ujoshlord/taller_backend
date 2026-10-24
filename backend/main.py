@@ -371,7 +371,19 @@ def obtener_resumen(current_user: Usuario = Depends(get_current_user), db: Sessi
         .count()
     )
     unidades_inventario = db.query(func.coalesce(func.sum(Inventario.cantidad), 0)).scalar() or 0
-    total_facturado = db.query(func.coalesce(func.sum(Kardex.sub_total), 0)).scalar() or 0
+
+    facturas_finalizadas = (
+        db.query(Facturacion)
+        .join(Consulta, Facturacion.id_consulta == Consulta.id_consulta)
+        .join(Estado, Consulta.id_estado == Estado.id_estado)
+        .filter(func.lower(Estado.nombre) == "finalizado")
+        .all()
+    )
+    total_facturado = 0.0
+    for fac in facturas_finalizadas:
+        sub_rep = sum(float(k.sub_total) for k in fac.items_kardex)
+        mano_obra = round(sub_rep * 0.20, 2) if sub_rep > 0 else 200.0
+        total_facturado += round(sub_rep + mano_obra, 2)
 
     return {
         "total_vehiculos": total_vehiculos,
@@ -1308,12 +1320,22 @@ def _build_factura_detalle(f: Facturacion) -> FacturaDetalleResponse:
             )
         )
 
+    subtotal_repuestos = round(total_f, 2)
+    if subtotal_repuestos > 0:
+        mano_obra = round(subtotal_repuestos * 0.20, 2)
+        tipo_mano_obra = "20% sobre repuestos"
+    else:
+        mano_obra = 200.00
+        tipo_mano_obra = "Tarifa fija (sin repuestos)"
+
+    total_factura = round(subtotal_repuestos + mano_obra, 2)
+
     return FacturaDetalleResponse(
         id_factura=f.id_factura,
         id_consulta=f.id_consulta,
         fecha_ingreso=c.fecha_ingreso if c else datetime.now(),
         fecha_salida=c.fecha_salida if c else None,
-        estado_consulta=c.estado.nombre if (c and c.estado) else "Activa",
+        estado_consulta=c.estado.nombre if (c and c.estado) else "Finalizado",
         cliente_nombre=p.nombre if p else "Sin cliente",
         cliente_nit=p.nit if p else "C/F",
         cliente_telefono=p.telefono if p else None,
@@ -1325,7 +1347,10 @@ def _build_factura_detalle(f: Facturacion) -> FacturaDetalleResponse:
         detalle_diagnostico=c.detalle_diagnostico if c else None,
         items_kardex=items,
         total_items=total_unidades,
-        total_factura=round(total_f, 2),
+        subtotal_repuestos=subtotal_repuestos,
+        mano_obra=mano_obra,
+        tipo_mano_obra=tipo_mano_obra,
+        total_factura=total_factura,
     )
 
 
@@ -1334,19 +1359,29 @@ def listar_facturas(
     current_user: Usuario = Depends(require_roles("Administrador", "Recepcionista", "Bodeguero")),
     db: Session = Depends(get_db),
 ):
-    # Asegurar que toda consulta tenga su registro en facturacion para visibilidad completa
-    consultas_sin_factura = (
+    # Asegurar que toda consulta finalizada tenga su registro en facturacion
+    consultas_finalizadas_sin_factura = (
         db.query(Consulta)
+        .join(Estado, Consulta.id_estado == Estado.id_estado)
         .outerjoin(Facturacion, Consulta.id_consulta == Facturacion.id_consulta)
+        .filter(func.lower(Estado.nombre) == "finalizado")
         .filter(Facturacion.id_factura.is_(None))
         .all()
     )
-    if consultas_sin_factura:
-        for c in consultas_sin_factura:
+    if consultas_finalizadas_sin_factura:
+        for c in consultas_finalizadas_sin_factura:
             db.add(Facturacion(id_consulta=c.id_consulta))
         db.commit()
 
-    facturas = db.query(Facturacion).order_by(Facturacion.id_factura.desc()).all()
+    # En la facturación solo deben estar los casos finalizados
+    facturas = (
+        db.query(Facturacion)
+        .join(Consulta, Facturacion.id_consulta == Consulta.id_consulta)
+        .join(Estado, Consulta.id_estado == Estado.id_estado)
+        .filter(func.lower(Estado.nombre) == "finalizado")
+        .order_by(Facturacion.id_factura.desc())
+        .all()
+    )
     return [_build_factura_detalle(f) for f in facturas]
 
 
