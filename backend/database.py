@@ -17,7 +17,9 @@ def _build_engine():
         pg_engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,
-            connect_args={"connect_timeout": 3} if "postgresql" in DATABASE_URL else {},
+            pool_size=5,
+            max_overflow=10,
+            connect_args={"connect_timeout": 10} if "postgresql" in DATABASE_URL else {},
         )
         with pg_engine.connect() as conn:
             conn.execute(text("SELECT 1"))

@@ -1361,17 +1361,35 @@ def listar_kardex(
 
 
 # =============================================================================
-# 10. ARCHIVOS ESTÁTICOS DEL FRONTEND (FASE 3)
+# 10. HEALTHCHECK Y SOPORTE LOCAL DE ARCHIVOS ESTÁTICOS
 # =============================================================================
+@app.get("/api/health")
+def healthcheck():
+    return {
+        "status": "online",
+        "service": "Taller Pro API Backend",
+        "database_engine": "PostgreSQL (Supabase)" if IS_POSTGRES else "SQLite",
+    }
+
+
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+    if (FRONTEND_DIR / "css").exists():
+        app.mount("/css", StaticFiles(directory=str(FRONTEND_DIR / "css")), name="css")
+    if (FRONTEND_DIR / "js").exists():
+        app.mount("/js", StaticFiles(directory=str(FRONTEND_DIR / "js")), name="js")
 
 
 @app.get("/")
-def serve_frontend():
+def root_endpoint():
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
         return FileResponse(str(index_path))
-    return {"message": "Taller Pro API funcionando. Frontend pendiente de compilación."}
+    return {
+        "status": "online",
+        "service": "Taller Pro API Backend (Render Container)",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
